@@ -18,7 +18,6 @@
 
 #define SERVER_PORT 1104
 #define BUFFER_SIZE 1024
-#define RESPONSE_MESSAGE "Saba Saba"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Saba Ebrahimi");
@@ -28,43 +27,11 @@ MODULE_VERSION("1.0");
 static struct socket *udp_socket = NULL;      // Socket for the UDP server
 static struct task_struct *udp_thread = NULL; // Kernel thread for listening
 
-// Read file
-static ssize_t read_file_from_kernel(const char *path, loff_t start, size_t size, char *buffer)
-{
-    struct file *filp;
-    ssize_t bytes_read = 0;
-
-    pr_info("the path is: %s, start is: %llu, size is: %ld\n", path, start, size);
-
-    // Open the file
-    filp = filp_open(path, O_RDONLY, 0);
-    if (IS_ERR(filp))
-    {
-        pr_err("Failed to open file: %s\n", path);
-        return PTR_ERR(filp);
-    }
-
-    // Read data from file
-    bytes_read = kernel_read(filp, buffer, size, &start);
-    if (bytes_read < 0)
-    {
-        pr_err("Failed to read file: %s\n", path);
-    }
-
-    printk(KERN_INFO "Received Data: %s\n", buffer);
-
-    filp_close(filp, NULL);
-
-    return bytes_read;
-}
-
 static int read_page_cache(const char *file_path, loff_t pos, size_t size, char *buffer)
 {
     struct path path;
     int ret;
-    pr_info("before kern_path\n");
     ret = kern_path(file_path, LOOKUP_FOLLOW, &path);
-    pr_info("After kern_info\n");
     if (ret)
     {
         pr_err("Failed to resolve path: %d\n", ret);
@@ -78,14 +45,11 @@ static int read_page_cache(const char *file_path, loff_t pos, size_t size, char 
     {
         struct folio *folio;
         size_t n;
-        pr_info("read mapping folio: \n");
         folio = read_mapping_folio(inode->i_mapping, pos >> PAGE_SHIFT,
                                    NULL);
         if (IS_ERR(folio))
             return PTR_ERR(folio);
-        pr_info("After read mapping folio: \n");
         n = memcpy_from_file_folio(buffer, folio, pos, size);
-        pr_info("After memcpy from file folio \n");
         folio_put(folio);
 
         buffer += n;
@@ -114,13 +78,7 @@ static int send_response(struct socket *sock, struct sockaddr_in *client_addr, c
 
     ret = kernel_sendmsg(sock, &msg, &iov, 1, iov.iov_len);
     if (ret < 0)
-    {
         pr_err("UDP Server: Failed to send response, error %d\n", ret);
-    }
-    else
-    {
-        pr_info("UDP Server: Response sent to client\n");
-    }
 
     return ret;
 }
@@ -134,10 +92,6 @@ static int udp_server_thread(void *data)
     char buffer[BUFFER_SIZE];
     char *received_elements[3];
     int ret;
-
-    received_elements[0] = kmalloc(256, GFP_KERNEL);
-    received_elements[1] = kmalloc(64, GFP_KERNEL);
-    received_elements[2] = kmalloc(64, GFP_KERNEL);
 
     struct sockaddr_in server_addr = {
         .sin_family = AF_INET,
@@ -172,9 +126,12 @@ static int udp_server_thread(void *data)
         {
             buffer[ret] = '\0';
             char *buffer_ptr = buffer;
-            pr_info("UDP Server: Received message: %s\n", buffer);
             char *token;
             int i = 0;
+            
+            received_elements[0] = kmalloc(256, GFP_KERNEL);
+            received_elements[1] = kmalloc(16, GFP_KERNEL);
+            received_elements[2] = kmalloc(16, GFP_KERNEL);
 
             token = strsep(&buffer_ptr, ",");
             while (token != NULL && i < 3)
@@ -213,32 +170,27 @@ static int udp_server_thread(void *data)
             }
 
             loff_t loff_index = (loff_t)index;
-            char *path = "/root/load.sh";
-            // path = "/root/";
-            // strcat(path, received_elements[0]);
+            char *path = kmalloc(256, GFP_KERNEL);
+            sprintf(path, "/root/%s", received_elements[0]);
+
             ssize_t result = read_page_cache(path, loff_index, size, file_content);
 
-            printk(KERN_INFO "page cache read %s \n", file_content);
-            if (file_content[0] == '\0')
-            {
-                pr_info("Entered open file \n");
-                result = read_file_from_kernel(path, loff_index, size, file_content);
-            }
-            if (result >= 0)
-            {
-                pr_info("Read %zd bytes from file %s\n", result, received_elements[0]);
-                // Process buffer as needed
-            }
-            else
-            {
+            // if (result >= 0)
+            // {
+            //     pr_info("Read %zd bytes from file %s\n", result, received_elements[0]);
+            // }
+            if (return < 0)
                 pr_err("Error reading file: %zd\n", result);
-            }
 
             // Send a response to the client
             send_response(udp_socket, &client_addr, file_content);
-            // kfree(buffer);
+
             kfree(file_content);
             kfree(path);
+            kfree(received_elements[0]);
+            kfree(received_elements[1]);
+            kfree(received_elements[2]);
+
         }
         else if (ret < 0)
         {
@@ -257,8 +209,6 @@ static int __init udp_server_init(void)
 
     int ret;
 
-    pr_info("UDP Server: Initializing module\n");
-
     // Create a UDP socket
     ret = sock_create(AF_INET, SOCK_DGRAM, IPPROTO_UDP, &udp_socket);
     if (ret < 0)
@@ -275,7 +225,6 @@ static int __init udp_server_init(void)
         sock_release(udp_socket);
         return PTR_ERR(udp_thread);
     }
-    pr_info("UDP Server: Module loaded\n");
     return 0;
 }
 
