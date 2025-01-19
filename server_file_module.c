@@ -27,6 +27,50 @@ MODULE_VERSION("1.0");
 static struct socket *udp_socket = NULL;      // Socket for the UDP server
 static struct task_struct *udp_thread = NULL; // Kernel thread for listening
 
+static int invalidate_page_cache_item(const char *file_path, loff_t pos, size_t size)
+{
+    struct path path;
+    int ret;
+    ret = kern_path(file_path, LOOKUP_FOLLOW, &path);
+    if (ret)
+    {
+        pr_err("Failed to resolve path: %d\n", ret);
+        return 1;
+    }
+
+    struct dentry *dentry = path.dentry;
+    struct address_space *mapping = dentry->d_inode->i_mapping;
+    while(size) 
+    {
+        size_t n = min_t(size_t, size,
+				 PAGE_SIZE - offset_in_page(pos));
+        ret = remote_invalidate_folio(mapping, pos >> PAGE_SHIFT);
+        if (ret) 
+            return ret;
+        pos += n;
+        size -= n;
+
+    }
+    return ret;
+}
+
+static int write_to_pagecache(const char *file_path, loff_t pos, size_t size, char *buffer)
+{   
+    struct path path;
+    int ret;
+    ret = kern_path(file_path, LOOKUP_FOLLOW, &path);
+    if (ret)
+    {
+        pr_err("Failed to resolve path: %d\n", ret);
+        return 1;
+    }
+
+    struct dentry *dentry = path.dentry;
+    struct inode *inode = dentry->d_inode;
+
+    return write_remote_to_pagecache(inode, pos >> PAGE_SHIFT, size, buffer);
+}
+
 static int read_page_cache(const char *file_path, loff_t pos, size_t size, char *buffer)
 {
     struct path path;
@@ -90,7 +134,7 @@ static int udp_server_thread(void *data)
     struct msghdr msg;
     struct kvec iov;
     char buffer[BUFFER_SIZE];
-    char *received_elements[3];
+    char *received_elements[5];
     int ret;
 
     struct sockaddr_in server_addr = {
@@ -126,15 +170,20 @@ static int udp_server_thread(void *data)
         {
             buffer[ret] = '\0';
             char *buffer_ptr = buffer;
+
+            pr_info("Received elements: %s\n", buffer);
+
             char *token;
             int i = 0;
             
             received_elements[0] = kmalloc(256, GFP_KERNEL);
             received_elements[1] = kmalloc(16, GFP_KERNEL);
             received_elements[2] = kmalloc(16, GFP_KERNEL);
+            received_elements[3] = kmalloc(16, GFP_KERNEL);
+            received_elements[4] = kmalloc(PAGE_SIZE, GFP_KERNEL);
 
             token = strsep(&buffer_ptr, ",");
-            while (token != NULL && i < 3)
+            while (token != NULL && i < 5)
             {
                 received_elements[i++] = token; // Store token in the array
                 token = strsep(&buffer_ptr, ",");
@@ -172,25 +221,39 @@ static int udp_server_thread(void *data)
             loff_t loff_index = (loff_t)index;
             char *path = kmalloc(256, GFP_KERNEL);
             sprintf(path, "/root/%s", received_elements[0]);
-
-            ssize_t result = read_page_cache(path, loff_index, size, file_content);
-
-            // if (result >= 0)
-            // {
-            //     pr_info("Read %zd bytes from file %s\n", result, received_elements[0]);
-            // }
-            if (return < 0)
-                pr_err("Error reading file: %zd\n", result);
+            pr_info("The last element: %s\n", received_elements[3]);
+            
+            ssize_t result = 0;
+            switch (received_elements[3][0]) {
+                case 'r': 
+                    pr_info("Entered read modeeee\n");
+                    result = read_page_cache(path, loff_index, size, file_content);
+                    if (result) {
+                        pr_err("Error reading file: %zd\n", result);    
+                        file_content = NULL;
+                    }
+                    send_response(udp_socket, &client_addr, file_content);  
+                break;
+                case 'i':
+                    pr_info("Enter invalidate mode\n");
+                    result = invalidate_page_cache_item(path, loff_index, size);
+                    if (result) 
+                        pr_err("Error in invalidating page cache %zd\n", result);
+                    send_response(udp_socket, &client_addr, "Invalidated!!");
+                break;
+                case 'w':
+                    pr_info("Entered Write mode \n");
+                    pr_info("The content is: %s\n", received_elements[4]);
+                    result = write_to_pagecache(path, loff_index, size, received_elements[4]);
+                    if (result)
+                        pr_err("Error in writing data to pagecache\n");
+                    send_response(udp_socket, &client_addr, "OK");
+                break;
+            }
 
             // Send a response to the client
-            send_response(udp_socket, &client_addr, file_content);
-
             kfree(file_content);
             kfree(path);
-            kfree(received_elements[0]);
-            kfree(received_elements[1]);
-            kfree(received_elements[2]);
-
         }
         else if (ret < 0)
         {

@@ -1,7 +1,7 @@
 obj-m += server_file_module.o
 
 BUILD_DIR := build
-KERNEL_SOURCE := /users/saba_er/saba/linux-6.11.6
+KERNEL_SOURCE := /home/amirmnoohi/linux-6.11.6
 PWD := $(shell pwd)
 
 default: $(BUILD_DIR)
