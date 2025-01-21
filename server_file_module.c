@@ -68,7 +68,7 @@ static int write_to_pagecache(const char *file_path, loff_t pos, size_t size, ch
     struct dentry *dentry = path.dentry;
     struct inode *inode = dentry->d_inode;
 
-    return write_remote_to_pagecache(inode, pos >> PAGE_SHIFT, size, buffer);
+    return write_remote_to_pagecache(inode, pos >> PAGE_SHIFT, 1024, buffer);
 }
 
 static int read_page_cache(const char *file_path, loff_t pos, size_t size, char *buffer)
@@ -172,6 +172,7 @@ static int udp_server_thread(void *data)
             char *buffer_ptr = buffer;
 
             pr_info("Received elements: %s\n", buffer);
+            pr_info("msg_len: %zu\n", msg.msg_iter.count);
 
             char *token;
             int i = 0;
@@ -180,7 +181,7 @@ static int udp_server_thread(void *data)
             received_elements[1] = kmalloc(16, GFP_KERNEL);
             received_elements[2] = kmalloc(16, GFP_KERNEL);
             received_elements[3] = kmalloc(16, GFP_KERNEL);
-            received_elements[4] = kmalloc(PAGE_SIZE, GFP_KERNEL);
+            received_elements[4] = kmalloc(1024, GFP_KERNEL);
 
             token = strsep(&buffer_ptr, ",");
             while (token != NULL && i < 5)
@@ -247,7 +248,6 @@ static int udp_server_thread(void *data)
                     result = write_to_pagecache(path, loff_index, size, received_elements[4]);
                     if (result)
                         pr_err("Error in writing data to pagecache\n");
-                    send_response(udp_socket, &client_addr, "OK");
                 break;
             }
 
